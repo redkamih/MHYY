@@ -23,6 +23,13 @@ sentry_sdk.init(
 # Running in Github Action, use this to get the config
 config = json.loads(os.environ.get('config'))
 
+# Options
+sct_status = os.environ.get('sct')  # https://sct.ftqq.com/
+sct_key = os.environ.get('sct_key')
+sct_url = f'https://sctapi.ftqq.com/{sct_key}.send?title=MHYY-AutoCheckin 自动推送'
+
+sct_msg = ''
+
 
 class RunError(Exception):
     pass
@@ -31,7 +38,7 @@ class RunError(Exception):
 token = config['token']
 client_type = config['type']
 try:
-    ver_info = r.get('https://sdk-static.mihoyo.com/hk4e_cn/mdk/launcher/api/resource?key=eYd89JmJ&launcher_id=18').text
+    ver_info = r.get('https://sdk-static.mihoyo.com/hk4e_cn/mdk/launcher/api/resource?key=eYd89JmJ&launcher_id=18', timeout=60).text
     version = json.loads(ver_info)['data']['game']['latest']['version']
     print(f'从官方API获取到云·原神最新版本号：{version}')
 except:
@@ -41,7 +48,6 @@ deviceid = config['deviceid']
 devicename = config['devicename']
 devicemodel = config['devicemodel']
 appid = config['appid']
-analytics = config['analytics']
 
 bbsid = re.findall(r'oi=[0-9]+', token)[0].replace('oi=', '')
 
@@ -73,32 +79,20 @@ if __name__ == '__main__':
     else:
         if token == '' or android == 0 or deviceid == '' or devicemodel == '' or appid == 0:
             raise RunError(f'请确认您的配置文件配置正确再运行本程序！')
-    if analytics:
-        try:
-            # Disable SSL warning of analytics server
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            ana = r.get(
-                f'https://analytics.api.ninym.top/mhyy?type={client_type}&version={version}&android={android}&deviceid={deviceid}&devicename={devicename}&devicemodel={devicemodel}&appid={appid}&bbsid={bbsid}', verify=False)
-            if json.loads(ana.text)['msg'] == 'OK':
-                print('统计信息提交成功，感谢你的支持！')
-            elif json.loads(ana.text)['msg'] == 'Duplicated':
-                print('你的统计信息已经提交过啦！感谢你的支持！')
-            else:
-                print(f'[WARN] 统计信息提交错误：{ana.text}')
-        except Exception as e:
-            print(f'提交失败！{e}')
     wait_time = random.randint(1, 3600) # Random Sleep to Avoid Ban
     print(f'为了避免同一时间签到人数太多导致被官方怀疑，开始休眠 {wait_time} 秒')
     time.sleep(wait_time)
-    wallet = r.get(WalletURL, headers=headers)
-    if wallet.text == {"data": None,"message":"登录已失效，请重新登录","retcode":-100}: 
+    wallet = r.get(WalletURL, headers=headers, timeout=60)
+    if json.loads(wallet.text) == {"data": None,"message":"登录已失效，请重新登录","retcode":-100}: 
         print(f'当前登录已过期，请重新登陆！返回为：{wallet.text}')
+        sct_msg += f'当前登录已过期，请重新登陆！返回为：{wallet.text}'
     else:
         print(
             f"你当前拥有免费时长 {json.loads(wallet.text)['data']['free_time']['free_time']} 分钟，畅玩卡状态为 {json.loads(wallet.text)['data']['play_card']['short_msg']}，拥有米云币 {json.loads(wallet.text)['data']['coin']['coin_num']} 枚")
-        announcement = r.get(AnnouncementURL, headers=headers)
+        sct_msg += f"你当前拥有免费时长 {json.loads(wallet.text)['data']['free_time']['free_time']} 分钟，畅玩卡状态为 {json.loads(wallet.text)['data']['play_card']['short_msg']}，拥有米云币 {json.loads(wallet.text)['data']['coin']['coin_num']} 枚"
+        announcement = r.get(AnnouncementURL, headers=headers, timeout=60)
         print(f'获取到公告列表：{json.loads(announcement.text)["data"]}')
-        res = r.get(NotificationURL, headers=headers)
+        res = r.get(NotificationURL, headers=headers, timeout=60)
         success,Signed = False,False
         try:
             if list(json.loads(res.text)['data']['list']) == []:
@@ -121,15 +115,25 @@ if __name__ == '__main__':
             if Signed:
                 print(
                     f'获取签到情况成功！今天是否已经签到过了呢？')
+                sct_msg += f'获取签到情况成功！今天是否已经签到过了呢？'
                 print(f'完整返回体为：{res.text}')
             elif not Signed and Over:
                 print(
                     f'获取签到情况成功！当前免费时长已经达到上限！签到情况为{json.loads(res.text)["data"]["list"][0]["msg"]}')
+                sct_msg += f'获取签到情况成功！当前免费时长已经达到上限！签到情况为{json.loads(res.text)["data"]["list"][0]["msg"]}'
                 print(f'完整返回体为：{res.text}')
             else:
                 print(
                     f'获取签到情况成功！当前签到情况为{json.loads(res.text)["data"]["list"][0]["msg"]}')
+                sct_msg += f'获取签到情况成功！当前签到情况为{json.loads(res.text)["data"]["list"][0]["msg"]}'
                 print(f'完整返回体为：{res.text}')
         else:
             raise RunError(
                 f"签到失败！请带着本次运行的所有log内容到 https://github.com/ElainaMoe/MHYY-AutoCheckin/issues 发起issue解决（或者自行解决）。签到出错，返回信息如下：{res.text}")
+    if sct_status:
+        res = r.post(sct_url, json={'title': '', 'short': 'MHYY-AutoCheckin 签到情况报告', 'desp': sct_msg}, timeout=30)
+        if res.status_code == 200:
+            print('sct推送完成！')
+        else:
+            print('sct无法推送')
+            print(res.text)
